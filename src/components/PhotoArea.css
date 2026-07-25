@@ -1,0 +1,70 @@
+.media-area.media-drag-over {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 2px var(--cyan-glow), var(--shadow-panel);
+}
+
+.photo-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: grab;
+  background: #1e1f22;
+  border: 1px solid #1e1f22;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.photo-item:hover {
+  transform: scale(1.04);
+  border-color: #35373c;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.photo-item.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.photo-item:active { cursor: grabbing; }
+
+.photo-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.delete-media-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #111214;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  padding: 3px 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition), transform var(--transition);
+}
+
+.photo-item:hover .delete-media-btn {
+  opacity: 1;
+}
+
+.delete-media-btn:hover {
+  background: #f23f43;
+  color: #ffffff;
+  transform: scale(1.1);
+}
