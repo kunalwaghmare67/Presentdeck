@@ -109,7 +109,7 @@ export function VideoArea() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const url = ev.target?.result as string;
-        const item: MediaItem = { id: crypto.randomUUID(), url, type: 'video', name: file.name };
+        const item: MediaItem = { id: crypto.randomUUID(), url, type: 'video', name: file.name, blob: file };
         const updated = [...useStore.getState().videos, item];
         setVideos(updated);
         saveVideo(item);

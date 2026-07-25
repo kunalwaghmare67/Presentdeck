@@ -30,6 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (session) {
       localStorage.setItem('presentdeck_session', JSON.stringify(session));
       useStore.setState({ currentUser: session });
+      await useStore.getState().clearCurrentSession();
       setCurrentUser(session);
       return true;
     }

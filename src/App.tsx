@@ -8,17 +8,18 @@ import { PresentationArea } from './components/PresentationArea';
 import { PhotoArea } from './components/PhotoArea';
 import { VideoArea } from './components/VideoArea';
 import { LoginPage } from './components/LoginPage';
-import { useState } from 'react';
+import { PresentingScreen } from './components/PresentingScreen';
+import { useState, useEffect } from 'react';
 import type { MediaItem, SlideItem } from './types';
 
 export default function App() {
+  const isPresentingView = typeof window !== 'undefined' && (
+    window.location.hash === '#presenting' || window.location.pathname.includes('presenting')
+  );
+
   const { currentUser } = useAuth();
   const setLiveContent = useStore(state => state.setLiveContent);
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
-
-  if (!currentUser) {
-    return <LoginPage />;
-  }
 
   // Zero-distance constraint so grabbing video/photo/slide is 100% instant
   const sensors = useSensors(
@@ -28,6 +29,14 @@ export default function App() {
       },
     })
   );
+
+  if (isPresentingView) {
+    return <PresentingScreen />;
+  }
+
+  if (!currentUser) {
+    return <LoginPage />;
+  }
 
   const handleDragStart = (event: any) => {
     const data = event.active.data.current;

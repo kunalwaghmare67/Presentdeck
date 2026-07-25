@@ -98,7 +98,7 @@ export function PhotoArea() {
       const reader = new FileReader();
       reader.onload = (ev) => {
         const url = ev.target?.result as string;
-        const item: MediaItem = { id: crypto.randomUUID(), url, type: 'image', name: file.name };
+        const item: MediaItem = { id: crypto.randomUUID(), url, type: 'image', name: file.name, blob: file };
         const updated = [...useStore.getState().photos, item];
         setPhotos(updated);
         savePhoto(item);

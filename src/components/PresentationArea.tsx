@@ -74,11 +74,13 @@ export function PresentationArea() {
       }
     } catch { /* unsupported */ }
 
+    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
+
     if (presentingRef.current && !presentingRef.current.closed) {
       presentingRef.current.focus();
     } else {
       presentingRef.current = window.open(
-        '/presenting.html',
+        liveUrl,
         'PresentDeck-Live',
         'width=960,height=540,menubar=no,toolbar=no,location=no,status=no'
       );
