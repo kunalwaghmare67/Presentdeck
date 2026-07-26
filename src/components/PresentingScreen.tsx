@@ -25,6 +25,22 @@ export function PresentingScreen() {
     return () => channel.close();
   }, []);
 
+  // Ctrl+L toggles fullscreen (for projector extended display)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   if (content.type === 'none' || !content.url) {
     return (
       <div className="presenting-root empty">
