@@ -593,11 +593,18 @@ export const useStore = create<AppState>((set, get) => ({
     );
 
     const currentUser = get().currentUser;
+    const currentUsername = currentUser?.username || 'anonymous';
+
+    const existingIdx = workflows.findIndex(
+      w => w.name.toLowerCase() === name.toLowerCase() && w.username === currentUsername
+    );
+    const existingWf = existingIdx >= 0 ? workflows[existingIdx] : null;
+
     const workflow: SavedWorkflow = {
-      id: crypto.randomUUID(),
+      id: existingWf ? existingWf.id : crypto.randomUUID(),
       name,
       savedAt: new Date().toISOString(),
-      username: currentUser?.username || 'anonymous',
+      username: currentUsername,
       state: {
         decks: serialDecks,
         activeDeckId,
@@ -610,7 +617,6 @@ export const useStore = create<AppState>((set, get) => ({
       },
     };
 
-    const existingIdx = workflows.findIndex(w => w.name.toLowerCase() === name.toLowerCase());
     let updatedWorkflows: SavedWorkflow[];
     if (existingIdx >= 0) {
       updatedWorkflows = [...workflows];
@@ -626,7 +632,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   loadWorkflowState: async (workflow: SavedWorkflow) => {
     const currentUser = get().currentUser;
-    if (currentUser?.role !== 'master' && workflow.username && workflow.username !== currentUser?.username) {
+    if (currentUser?.role !== 'master' && workflow.username !== currentUser?.username) {
       throw new Error('Unauthorized: You do not have permission to load this workflow.');
     }
 
@@ -742,7 +748,7 @@ export const useStore = create<AppState>((set, get) => ({
   renameWorkflow: async (id, newName) => {
     const currentUser = get().currentUser;
     const target = get().workflows.find(w => w.id === id);
-    if (currentUser?.role !== 'master' && target?.username && target.username !== currentUser?.username) {
+    if (currentUser?.role !== 'master' && target?.username !== currentUser?.username) {
       throw new Error('Unauthorized: You do not have permission to rename this workflow.');
     }
     const updated = get().workflows.map(w => w.id === id ? { ...w, name: newName } : w);
@@ -753,7 +759,7 @@ export const useStore = create<AppState>((set, get) => ({
   deleteWorkflow: async (id) => {
     const currentUser = get().currentUser;
     const target = get().workflows.find(w => w.id === id);
-    if (currentUser?.role !== 'master' && target?.username && target.username !== currentUser?.username) {
+    if (currentUser?.role !== 'master' && target?.username !== currentUser?.username) {
       throw new Error('Unauthorized: You do not have permission to delete this workflow.');
     }
     const updated = get().workflows.filter(w => w.id !== id);
@@ -815,7 +821,7 @@ export const useStore = create<AppState>((set, get) => ({
       },
     };
 
-    const jsonStr = JSON.stringify(exportObject, null, 2);
+    const jsonStr = JSON.stringify(exportObject, null, 2); // JSON.stringify(workflow, null, 2)
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -831,10 +837,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!data || !data.name || !data.state) {
       throw new Error('Invalid workflow file format.');
     }
+    const currentUser = get().currentUser;
     const imported: SavedWorkflow = {
       ...data,
       id: crypto.randomUUID(),
       savedAt: new Date().toISOString(),
+      username: currentUser?.username || 'anonymous',
     };
     const updated = [imported, ...get().workflows];
     set({ workflows: updated });

@@ -353,6 +353,29 @@
   color: var(--text-primary);
 }
 
+.wf-owner-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+}
+
+.wf-owner-tag.master-tag {
+  background: rgba(251, 191, 36, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #f59e0b;
+}
+
+.wf-owner-tag.operator-tag {
+  background: rgba(129, 140, 248, 0.15);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  color: #a5b4fc;
+}
+
 .wf-act-load {
   background: rgba(35, 165, 90, 0.15);
   border-color: rgba(35, 165, 90, 0.3);

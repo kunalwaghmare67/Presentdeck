@@ -464,15 +464,6 @@ export function PPTFlow() {
           <h2 onClick={(e) => { e.stopPropagation(); setShowDeckDropdown(!showDeckDropdown); }}>
             PPTs <span className="arrow-down">▼</span>
           </h2>
-          <div className="deck-title-wrapper" onDoubleClick={() => activeDeckId && activeDeck && handleStartRenameDeck(activeDeckId, activeDeck.title)}>
-            {renamingDeckId === activeDeckId ? (
-              <input ref={deckTitleInputRef} type="text" className="deck-rename-input" value={deckTitleText}
-                onChange={e => setDeckTitleText(e.target.value)} onBlur={handleFinishDeckRename}
-                onKeyDown={e => { if (e.key === 'Enter') handleFinishDeckRename(); else if (e.key === 'Escape') setRenamingDeckId(null); }} />
-            ) : (
-              <span className="current-deck-name" title="Double click to rename">{activeDeck ? activeDeck.title : 'No Deck'}</span>
-            )}
-          </div>
         </div>
         <div className="ppt-header-actions">
           <button className="add-btn" onClick={() => fileInputRef.current?.click()} title="Upload Presentation Deck">+</button>

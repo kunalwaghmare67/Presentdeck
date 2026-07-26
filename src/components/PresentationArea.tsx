@@ -74,7 +74,7 @@ export function PresentationArea() {
       }
     } catch { /* unsupported */ }
 
-    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
+    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`; /* presenting.html */
 
     if (presentingRef.current && !presentingRef.current.closed) {
       presentingRef.current.focus();

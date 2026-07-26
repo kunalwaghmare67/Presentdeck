@@ -1,5 +1,5 @@
 import { openDB, type DBSchema } from 'idb';
-import type { SlideItem, Deck, AudioTrack, MediaItem, SavedWorkflow } from './types';
+import type { SlideItem, Deck, AudioTrack, MediaItem, SavedWorkflow, AuthSession } from './types';
 
 interface PresentDeckDB extends DBSchema {
   decks: {
@@ -241,10 +241,17 @@ export async function saveWorkflowToDB(workflow: SavedWorkflow) {
   await db.put('workflows', workflow);
 }
 
-export async function loadWorkflowsFromDB(): Promise<SavedWorkflow[]> {
+export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Promise<SavedWorkflow[]> {
   const db = await dbPromise;
   const list = await db.getAll('workflows');
-  return list.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+  const sorted = list.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+  if (!currentUser) {
+    return [];
+  }
+  if (currentUser.role === 'master') {
+    return sorted;
+  }
+  return sorted.filter(w => w.username === currentUser.username);
 }
 
 export async function deleteWorkflowFromDB(id: string) {

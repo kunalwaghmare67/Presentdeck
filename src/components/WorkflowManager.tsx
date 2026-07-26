@@ -38,12 +38,12 @@ export function WorkflowManager() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load saved workflows on mount
+  // Load saved workflows on mount with data-layer operator isolation
   useEffect(() => {
-    loadWorkflowsFromDB().then(list => {
+    loadWorkflowsFromDB(currentUser).then(list => {
       if (list?.length) setWorkflows(list);
     }).catch(console.error);
-  }, [setWorkflows]);
+  }, [setWorkflows, currentUser]);
 
   // Click outside listener to close dropdown
   useEffect(() => {
@@ -86,8 +86,8 @@ export function WorkflowManager() {
     const name = workflowNameInput.trim();
     if (!name) return;
 
-    // Check if workflow with this name already exists
-    const exists = workflows.some(w => w.name.toLowerCase() === name.toLowerCase());
+    // Check if workflow with this name already exists for current operator
+    const exists = visibleWorkflows.some(w => w.name.toLowerCase() === name.toLowerCase());
     if (exists && !overwriteTarget) {
       setOverwriteTarget(name);
       return;
@@ -107,6 +107,11 @@ export function WorkflowManager() {
   };
 
   const handleLoadWorkflow = async (wf: SavedWorkflow) => {
+    const canModify = isMaster || wf.username === currentUser?.username;
+    if (!canModify) {
+      showToast('Unauthorized: You do not have permission to load this workflow.');
+      return;
+    }
     if (!window.confirm(`Load workflow "${wf.name}"?\nThis will replace your current session state.`)) return;
     setIsLoadingWfId(wf.id);
     try {
@@ -138,6 +143,11 @@ export function WorkflowManager() {
   };
 
   const handleStartRename = (wf: SavedWorkflow) => {
+    const canModify = isMaster || wf.username === currentUser?.username;
+    if (!canModify) {
+      showToast('Unauthorized: You do not have permission to rename this workflow.');
+      return;
+    }
     setEditingWfId(wf.id);
     setEditingWfName(wf.name);
   };
@@ -171,7 +181,7 @@ export function WorkflowManager() {
 
   const visibleWorkflows = isMaster
     ? workflows
-    : workflows.filter(w => !w.username || w.username === currentUser?.username);
+    : workflows.filter(w => w.username === currentUser?.username);
 
   const countTotals = (wf: SavedWorkflow) => {
     const decks = wf.state?.decks || [];
@@ -295,27 +305,34 @@ export function WorkflowManager() {
                     const counts = countTotals(wf);
                     const isEditing = editingWfId === wf.id;
                     const dateStr = new Date(wf.savedAt).toLocaleString();
-                    const canDelete = isMaster || !wf.username || wf.username === currentUser?.username;
+                    const canModify = isMaster || wf.username === currentUser?.username;
 
                     return (
                       <div key={wf.id} className="wf-card">
                         <div className="wf-card-top">
-                          {isEditing ? (
-                            <input
-                              type="text"
-                              className="wf-rename-input"
-                              value={editingWfName}
-                              onChange={e => setEditingWfName(e.target.value)}
-                              onBlur={() => handleFinishRename(wf.id)}
-                              onKeyDown={e => { if (e.key === 'Enter') handleFinishRename(wf.id); }}
-                              autoFocus
-                            />
-                          ) : (
-                            <h4 className="wf-card-title" onDoubleClick={() => handleStartRename(wf)}>
-                              {wf.name}
-                            </h4>
-                          )}
-                          <span className="wf-card-date">{dateStr}</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                className="wf-rename-input"
+                                value={editingWfName}
+                                onChange={e => setEditingWfName(e.target.value)}
+                                onBlur={() => handleFinishRename(wf.id)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleFinishRename(wf.id); }}
+                                autoFocus
+                              />
+                            ) : (
+                              <h4 className="wf-card-title" onDoubleClick={() => handleStartRename(wf)} style={{ cursor: canModify ? 'pointer' : 'default' }}>
+                                {wf.name}
+                              </h4>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                              <span className={`wf-owner-tag ${wf.username === 'Kunal' ? 'master-tag' : 'operator-tag'}`}>
+                                {wf.username === 'Kunal' ? '👑 Saved by: Kunal (Master)' : (wf.username ? `👤 Saved by: ${wf.username}` : '📂 Saved by: Legacy')}
+                              </span>
+                              <span className="wf-card-date">{dateStr}</span>
+                            </div>
+                          </div>
                         </div>
 
                         <div className="wf-card-badges">
@@ -323,17 +340,17 @@ export function WorkflowManager() {
                           {counts.audioCount > 0 && <span className="wf-badge">🎵 {counts.audioCount} Audio</span>}
                           {counts.photoCount > 0 && <span className="wf-badge">🖼️ {counts.photoCount} Photos</span>}
                           {counts.videoCount > 0 && <span className="wf-badge">🎬 {counts.videoCount} Videos</span>}
-                          {wf.username && <span className="wf-badge" style={{ background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)' }}>👤 {wf.username}</span>}
                         </div>
 
                         <div className="wf-card-actions">
                           <button
                             className="wf-act-btn wf-act-load"
                             onClick={() => handleLoadWorkflow(wf)}
-                            disabled={isLoadingWfId === wf.id}
-                            title="Load state"
+                            disabled={isLoadingWfId === wf.id || !canModify}
+                            style={!canModify ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                            title={!canModify ? "Permission required to load workflow" : "Load state"}
                           >
-                            {isLoadingWfId === wf.id ? 'Loading...' : '📥 Load'}
+                            {isLoadingWfId === wf.id ? 'Loading...' : !canModify ? '🔒 Load' : '📥 Load'}
                           </button>
                           <button
                             className="wf-act-btn wf-act-export"
@@ -345,11 +362,13 @@ export function WorkflowManager() {
                           <button
                             className="wf-act-btn"
                             onClick={() => handleStartRename(wf)}
-                            title="Rename"
+                            disabled={!canModify}
+                            style={!canModify ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                            title={!canModify ? "Permission required to rename workflow" : "Rename"}
                           >
-                            ✏️ Rename
+                            {!canModify ? '🔒 Rename' : '✏️ Rename'}
                           </button>
-                          {canDelete ? (
+                          {canModify ? (
                             <button
                               className="wf-act-btn wf-act-delete"
                               onClick={() => setDeleteTarget(wf)}
