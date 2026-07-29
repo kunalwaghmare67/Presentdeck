@@ -1,5 +1,6 @@
 import { openDB, type DBSchema } from 'idb';
 import type { SlideItem, Deck, AudioTrack, MediaItem, SavedWorkflow, AuthSession } from './types';
+import { supabase } from './supabase';
 
 interface PresentDeckDB extends DBSchema {
   decks: {
@@ -235,19 +236,131 @@ export async function clearAll() {
   await db.clear('videos');
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function prepareStateForCloud(state: any): Promise<any> {
+  if (!state) return {};
+  const cleanedDecks = await Promise.all(
+    (state.decks || []).map(async (d: any) => ({
+      ...d,
+      slides: await Promise.all(
+        (d.slides || []).map(async (s: any) => {
+          let dataUrl = s.dataUrl;
+          if (!dataUrl && s.blob) {
+            try { dataUrl = await blobToDataUrl(s.blob); } catch {}
+          }
+          const { blob, ...rest } = s;
+          return { ...rest, dataUrl };
+        })
+      ),
+    }))
+  );
+
+  const cleanedAudio = await Promise.all(
+    (state.audioTracks || []).map(async (t: any) => {
+      let dataUrl = t.dataUrl;
+      if (!dataUrl && t.blob) {
+        try { dataUrl = await blobToDataUrl(t.blob); } catch {}
+      }
+      const { blob, ...rest } = t;
+      return { ...rest, dataUrl };
+    })
+  );
+
+  const cleanedPhotos = await Promise.all(
+    (state.photos || []).map(async (p: any) => {
+      let dataUrl = p.dataUrl;
+      if (!dataUrl && p.blob) {
+        try { dataUrl = await blobToDataUrl(p.blob); } catch {}
+      }
+      const { blob, ...rest } = p;
+      return { ...rest, dataUrl };
+    })
+  );
+
+  const cleanedVideos = await Promise.all(
+    (state.videos || []).map(async (v: any) => {
+      let dataUrl = v.dataUrl;
+      if (!dataUrl && v.blob) {
+        try { dataUrl = await blobToDataUrl(v.blob); } catch {}
+      }
+      const { blob, ...rest } = v;
+      return { ...rest, dataUrl };
+    })
+  );
+
+  return {
+    ...state,
+    decks: cleanedDecks,
+    audioTracks: cleanedAudio,
+    photos: cleanedPhotos,
+    videos: cleanedVideos,
+  };
+}
+
 // Workflows
 export async function saveWorkflowToDB(workflow: SavedWorkflow) {
   const db = await dbPromise;
   await db.put('workflows', workflow);
+
+  // Cloud sync to Supabase
+  try {
+    const cloudState = await prepareStateForCloud(workflow.state);
+    const { error } = await supabase.from('workflows').upsert({
+      id: workflow.id,
+      name: workflow.name,
+      username: workflow.username || 'anonymous',
+      saved_at: workflow.savedAt,
+      state: cloudState,
+    });
+    if (error) console.error('Supabase save error:', error.message);
+  } catch (err) {
+    console.error('Supabase workflow save failed:', err);
+  }
 }
 
 export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Promise<SavedWorkflow[]> {
-  const db = await dbPromise;
-  const list = await db.getAll('workflows');
-  const sorted = list.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
   if (!currentUser) {
     return [];
   }
+
+  // Try loading from Cloud (Supabase) first
+  try {
+    let query = supabase.from('workflows').select('*').order('saved_at', { ascending: false });
+    if (currentUser.role !== 'master') {
+      query = query.eq('username', currentUser.username);
+    }
+    const { data, error } = await query;
+    if (!error && data && data.length > 0) {
+      const cloudWorkflows: SavedWorkflow[] = data.map(row => ({
+        id: row.id,
+        name: row.name,
+        savedAt: row.saved_at || row.savedAt,
+        username: row.username,
+        state: row.state,
+      }));
+      // Sync fetched cloud workflows to local IndexedDB
+      const db = await dbPromise;
+      for (const wf of cloudWorkflows) {
+        await db.put('workflows', wf);
+      }
+      return cloudWorkflows;
+    }
+  } catch (err) {
+    console.warn('Could not fetch workflows from Supabase, falling back to local storage:', err);
+  }
+
+  // Fallback to local IndexedDB if offline or Supabase empty/error
+  const db = await dbPromise;
+  const list = await db.getAll('workflows');
+  const sorted = list.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
   if (currentUser.role === 'master') {
     return sorted;
   }
@@ -257,6 +370,12 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
 export async function deleteWorkflowFromDB(id: string) {
   const db = await dbPromise;
   await db.delete('workflows', id);
+
+  try {
+    await supabase.from('workflows').delete().eq('id', id);
+  } catch (err) {
+    console.error('Supabase delete error:', err);
+  }
 }
 
 export async function renameWorkflowInDB(id: string, newName: string) {
@@ -265,5 +384,11 @@ export async function renameWorkflowInDB(id: string, newName: string) {
   if (wf) {
     wf.name = newName;
     await db.put('workflows', wf);
+  }
+
+  try {
+    await supabase.from('workflows').update({ name: newName }).eq('id', id);
+  } catch (err) {
+    console.error('Supabase rename error:', err);
   }
 }
