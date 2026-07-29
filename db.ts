@@ -247,54 +247,37 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 
 async function prepareStateForCloud(state: any): Promise<any> {
   if (!state) return {};
-  const cleanedDecks = await Promise.all(
-    (state.decks || []).map(async (d: any) => ({
-      ...d,
-      slides: await Promise.all(
-        (d.slides || []).map(async (s: any) => {
-          let dataUrl = s.dataUrl;
-          if (!dataUrl && s.blob) {
-            try { dataUrl = await blobToDataUrl(s.blob); } catch {}
-          }
-          const { blob, ...rest } = s;
-          return { ...rest, dataUrl };
-        })
-      ),
-    }))
-  );
 
-  const cleanedAudio = await Promise.all(
-    (state.audioTracks || []).map(async (t: any) => {
-      let dataUrl = t.dataUrl;
-      if (!dataUrl && t.blob) {
-        try { dataUrl = await blobToDataUrl(t.blob); } catch {}
-      }
-      const { blob, ...rest } = t;
-      return { ...rest, dataUrl };
-    })
-  );
+  const truncateDataUrl = (dataUrl?: string) => {
+    if (!dataUrl) return undefined;
+    if (dataUrl.startsWith('data:') && dataUrl.length > 512 * 1024) {
+      return undefined;
+    }
+    return dataUrl;
+  };
 
-  const cleanedPhotos = await Promise.all(
-    (state.photos || []).map(async (p: any) => {
-      let dataUrl = p.dataUrl;
-      if (!dataUrl && p.blob) {
-        try { dataUrl = await blobToDataUrl(p.blob); } catch {}
-      }
-      const { blob, ...rest } = p;
-      return { ...rest, dataUrl };
-    })
-  );
+  const cleanedDecks = (state.decks || []).map((d: any) => ({
+    ...d,
+    slides: (d.slides || []).map((s: any) => {
+      const { blob, ...rest } = s;
+      return { ...rest, dataUrl: truncateDataUrl(s.dataUrl) };
+    }),
+  }));
 
-  const cleanedVideos = await Promise.all(
-    (state.videos || []).map(async (v: any) => {
-      let dataUrl = v.dataUrl;
-      if (!dataUrl && v.blob) {
-        try { dataUrl = await blobToDataUrl(v.blob); } catch {}
-      }
-      const { blob, ...rest } = v;
-      return { ...rest, dataUrl };
-    })
-  );
+  const cleanedAudio = (state.audioTracks || []).map((t: any) => {
+    const { blob, ...rest } = t;
+    return { ...rest, dataUrl: truncateDataUrl(t.dataUrl) };
+  });
+
+  const cleanedPhotos = (state.photos || []).map((p: any) => {
+    const { blob, ...rest } = p;
+    return { ...rest, dataUrl: truncateDataUrl(p.dataUrl) };
+  });
+
+  const cleanedVideos = (state.videos || []).map((v: any) => {
+    const { blob, ...rest } = v;
+    return { ...rest, dataUrl: truncateDataUrl(v.dataUrl) };
+  });
 
   return {
     ...state,
@@ -331,40 +314,54 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
     return [];
   }
 
-  // Try loading from Cloud (Supabase) first
+  // 1. Fetch local workflows from IndexedDB
+  const db = await dbPromise;
+  const localList = await db.getAll('workflows');
+  let localFiltered = localList;
+  if (currentUser.role !== 'master') {
+    localFiltered = localList.filter(w => !w.username || w.username === currentUser.username);
+  }
+
+  // 2. Fetch cloud workflows from Supabase
+  let cloudWorkflows: SavedWorkflow[] = [];
   try {
     let query = supabase.from('workflows').select('*').order('saved_at', { ascending: false });
     if (currentUser.role !== 'master') {
       query = query.eq('username', currentUser.username);
     }
     const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      const cloudWorkflows: SavedWorkflow[] = data.map((row: any) => ({
+    if (error) {
+      console.error('Supabase load error:', error.message);
+    } else if (data) {
+      cloudWorkflows = data.map((row: any) => ({
         id: row.id,
         name: row.name,
         savedAt: row.saved_at || row.savedAt,
         username: row.username,
         state: row.state,
       }));
-      // Sync fetched cloud workflows to local IndexedDB
-      const db = await dbPromise;
-      for (const wf of cloudWorkflows) {
-        await db.put('workflows', wf);
-      }
-      return cloudWorkflows;
     }
   } catch (err) {
-    console.warn('Could not fetch workflows from Supabase, falling back to local storage:', err);
+    console.warn('Could not fetch workflows from Supabase:', err);
   }
 
-  // Fallback to local IndexedDB if offline or Supabase empty/error
-  const db = await dbPromise;
-  const list = await db.getAll('workflows');
-  const sorted = list.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
-  if (currentUser.role === 'master') {
-    return sorted;
+  // 3. Merge Cloud + Local workflows by ID
+  const workflowMap = new Map<string, SavedWorkflow>();
+
+  for (const wf of localFiltered) {
+    workflowMap.set(wf.id, wf);
   }
-  return sorted.filter(w => w.username === currentUser.username);
+
+  for (const wf of cloudWorkflows) {
+    const existing = workflowMap.get(wf.id);
+    if (!existing || new Date(wf.savedAt).getTime() >= new Date(existing.savedAt).getTime()) {
+      workflowMap.set(wf.id, wf);
+      await db.put('workflows', wf);
+    }
+  }
+
+  const mergedList = Array.from(workflowMap.values());
+  return mergedList.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
 }
 
 export async function deleteWorkflowFromDB(id: string) {
