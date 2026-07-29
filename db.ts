@@ -247,45 +247,23 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
 
 async function prepareStateForCloud(state: any): Promise<any> {
   if (!state) return {};
-
-  const truncateDataUrl = (dataUrl?: string) => {
-    if (!dataUrl) return undefined;
-    if (dataUrl.startsWith('data:') && dataUrl.length > 512 * 1024) {
-      return undefined;
-    }
-    return dataUrl;
-  };
-
-  const cleanedDecks = (state.decks || []).map((d: any) => ({
-    ...d,
-    slides: (d.slides || []).map((s: any) => {
-      const { blob, ...rest } = s;
-      return { ...rest, dataUrl: truncateDataUrl(s.dataUrl) };
-    }),
-  }));
-
-  const cleanedAudio = (state.audioTracks || []).map((t: any) => {
-    const { blob, ...rest } = t;
-    return { ...rest, dataUrl: truncateDataUrl(t.dataUrl) };
-  });
-
-  const cleanedPhotos = (state.photos || []).map((p: any) => {
-    const { blob, ...rest } = p;
-    return { ...rest, dataUrl: truncateDataUrl(p.dataUrl) };
-  });
-
-  const cleanedVideos = (state.videos || []).map((v: any) => {
-    const { blob, ...rest } = v;
-    return { ...rest, dataUrl: truncateDataUrl(v.dataUrl) };
-  });
-
-  return {
-    ...state,
-    decks: cleanedDecks,
-    audioTracks: cleanedAudio,
-    photos: cleanedPhotos,
-    videos: cleanedVideos,
-  };
+  try {
+    const cleanedJson = JSON.parse(
+      JSON.stringify(state, (key, value) => {
+        if (key === 'blob' || (value && typeof value === 'object' && value.constructor && value.constructor.name === 'Blob')) {
+          return undefined;
+        }
+        if (typeof value === 'string' && value.startsWith('data:') && value.length > 256 * 1024) {
+          return undefined;
+        }
+        return value;
+      })
+    );
+    return cleanedJson;
+  } catch (err) {
+    console.error('prepareStateForCloud serialization error:', err);
+    return {};
+  }
 }
 
 // Workflows
@@ -303,7 +281,11 @@ export async function saveWorkflowToDB(workflow: SavedWorkflow) {
       saved_at: workflow.savedAt,
       state: cloudState,
     });
-    if (error) console.error('Supabase save error:', error.message);
+    if (error) {
+      console.error('Supabase save error:', error.message);
+    } else {
+      console.log(`Successfully synced workflow "${workflow.name}" to Supabase Cloud.`);
+    }
   } catch (err) {
     console.error('Supabase workflow save failed:', err);
   }
@@ -314,15 +296,9 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
     return [];
   }
 
-  // 1. Fetch local workflows from IndexedDB
   const db = await dbPromise;
-  const localList = await db.getAll('workflows');
-  let localFiltered = localList;
-  if (currentUser.role !== 'master') {
-    localFiltered = localList.filter(w => !w.username || w.username === currentUser.username);
-  }
 
-  // 2. Fetch cloud workflows from Supabase
+  // 1. Fetch cloud workflows from Supabase
   let cloudWorkflows: SavedWorkflow[] = [];
   try {
     let query = supabase.from('workflows').select('*').order('saved_at', { ascending: false });
@@ -332,7 +308,7 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
     const { data, error } = await query;
     if (error) {
       console.error('Supabase load error:', error.message);
-    } else if (data) {
+    } else if (data && data.length > 0) {
       cloudWorkflows = data.map((row: any) => ({
         id: row.id,
         name: row.name,
@@ -345,20 +321,29 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
     console.warn('Could not fetch workflows from Supabase:', err);
   }
 
+  // 2. Fetch local workflows from IndexedDB
+  const localList = await db.getAll('workflows');
+  let localFiltered = localList;
+  if (currentUser.role !== 'master') {
+    localFiltered = localList.filter(w => !w.username || w.username === currentUser.username);
+  }
+
   // 3. Auto-sync any local workflows missing from Cloud up to Supabase
   const cloudIdSet = new Set(cloudWorkflows.map(w => w.id));
   for (const localWf of localFiltered) {
     if (!cloudIdSet.has(localWf.id)) {
       try {
         const cloudState = await prepareStateForCloud(localWf.state);
-        await supabase.from('workflows').upsert({
+        const { error } = await supabase.from('workflows').upsert({
           id: localWf.id,
           name: localWf.name,
           username: localWf.username || currentUser.username,
           saved_at: localWf.savedAt,
           state: cloudState,
         });
-        cloudWorkflows.push(localWf);
+        if (!error) {
+          cloudWorkflows.push(localWf);
+        }
       } catch (e) {
         console.error('Failed auto-syncing local workflow to cloud:', e);
       }
