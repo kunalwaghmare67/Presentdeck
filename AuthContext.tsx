@@ -1,25 +1,32 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { User } from '@supabase/supabase-js';
 import type { AuthSession } from '../types';
 import { authenticateUser } from '../config/authConfig';
 import { useStore } from '../store';
-import { supabase } from '../lib/supabase';
-import { hydrateFromSupabase } from '../lib/sync';
+import { generateWorkspaceCode, ensureWorkspace, hydrateFromSupabase } from '../lib/sync';
+
+const LOCAL_STORAGE_CODE_KEY = 'presentdeck_workspace_code';
 
 interface AuthContextType {
   currentUser: AuthSession | null;
-  supabaseUser: User | null;
+  workspaceCode: string | null;
   login: (username: string, passwordAttempt: string) => Promise<boolean>;
-  sendMagicLink: (email: string) => Promise<{ error: Error | null }>;
   logout: () => void;
-  signOutCloud: () => Promise<void>;
+  createWorkspace: () => Promise<string>;
+  joinWorkspace: (code: string) => Promise<boolean>;
+  leaveWorkspace: () => void;
   isGuestMode: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
+  const [workspaceCode, setWorkspaceCode] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(LOCAL_STORAGE_CODE_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
 
   const [currentUser, setCurrentUser] = useState<AuthSession | null>(() => {
     try {
@@ -35,32 +42,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    // Listen to Supabase Auth state changes (Magic link callback, session restore)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const u = session?.user || null;
-      setSupabaseUser(u);
-      if (u) {
-        // Auto-hydrate store & IndexedDB cache from Supabase cloud Postgres + Storage
-        await hydrateFromSupabase(u.id, useStore);
-      }
-    });
+    if (workspaceCode) {
+      hydrateFromSupabase(workspaceCode, useStore).catch(console.error);
+    }
+  }, [workspaceCode]);
 
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const sendMagicLink = async (email: string) => {
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}`,
-      },
-    });
-    return { error: error as Error | null };
+  const createWorkspace = async (): Promise<string> => {
+    const code = generateWorkspaceCode();
+    await ensureWorkspace(code);
+    localStorage.setItem(LOCAL_STORAGE_CODE_KEY, code);
+    setWorkspaceCode(code);
+    await hydrateFromSupabase(code, useStore);
+    return code;
   };
 
-  const signOutCloud = async () => {
-    await supabase.auth.signOut();
-    setSupabaseUser(null);
+  const joinWorkspace = async (code: string): Promise<boolean> => {
+    const cleanCode = code.trim().toUpperCase();
+    if (!cleanCode || cleanCode.length < 4) return false;
+
+    const ok = await ensureWorkspace(cleanCode);
+    if (ok) {
+      localStorage.setItem(LOCAL_STORAGE_CODE_KEY, cleanCode);
+      setWorkspaceCode(cleanCode);
+      await hydrateFromSupabase(cleanCode, useStore);
+      return true;
+    }
+    return false;
+  };
+
+  const leaveWorkspace = () => {
+    localStorage.removeItem(LOCAL_STORAGE_CODE_KEY);
+    setWorkspaceCode(null);
   };
 
   const login = async (username: string, passwordAttempt: string): Promise<boolean> => {
@@ -79,13 +91,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('presentdeck_session');
     useStore.setState({ currentUser: null });
     setCurrentUser(null);
-    signOutCloud();
   };
 
-  const isGuestMode = !supabaseUser;
+  const isGuestMode = !workspaceCode;
 
   return (
-    <AuthContext.Provider value={{ currentUser, supabaseUser, login, sendMagicLink, logout, signOutCloud, isGuestMode }}>
+    <AuthContext.Provider value={{
+      currentUser,
+      workspaceCode,
+      login,
+      logout,
+      createWorkspace,
+      joinWorkspace,
+      leaveWorkspace,
+      isGuestMode,
+    }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,16 +1,48 @@
 import { supabase } from './supabase';
 import type { Deck, SlideItem, AudioTrack, MediaItem } from '../types';
-import { saveDecks, saveSlides, saveAudioTracks, syncPhotos, syncVideos } from '../db';
+import { saveDecks, saveAudioTracks, syncPhotos, syncVideos } from '../db';
 
 const BUCKET = 'presentdeck-media';
 
 /**
- * Upload a media blob/file to Supabase Storage under {userId}/{uuid}-{filename}
- * Returns the storage_path string.
+ * Generate a 6-character human-friendly alphanumeric workspace code
+ * Excludes ambiguous characters: 0, O, 1, I, l
  */
-export async function uploadMediaToStorage(userId: string, blob: Blob | File, filename: string): Promise<string> {
+export function generateWorkspaceCode(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+/**
+ * Ensure workspace code exists in Supabase workspaces table
+ */
+export async function ensureWorkspace(workspaceCode: string): Promise<boolean> {
+  if (!workspaceCode) return false;
+  try {
+    const { error } = await supabase
+      .from('workspaces')
+      .upsert({ code: workspaceCode.toUpperCase() });
+    if (error) {
+      console.error('Failed to ensure workspace code:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('ensureWorkspace exception:', err);
+    return false;
+  }
+}
+
+/**
+ * Upload a media blob/file to Supabase Storage under {workspaceCode}/{uuid}-{filename}
+ */
+export async function uploadMediaToStorage(workspaceCode: string, blob: Blob | File, filename: string): Promise<string> {
   const cleanName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const path = `${userId}/${crypto.randomUUID()}-${cleanName}`;
+  const path = `${workspaceCode.toUpperCase()}/${crypto.randomUUID()}-${cleanName}`;
   const { data, error } = await supabase.storage.from(BUCKET).upload(path, blob, {
     upsert: true,
     contentType: blob.type || 'application/octet-stream',
@@ -23,65 +55,55 @@ export async function uploadMediaToStorage(userId: string, blob: Blob | File, fi
 }
 
 /**
- * Get display URL for a storage_path (creates a signed URL valid for 24h, or public URL)
+ * Get display URL for a storage_path
  */
 export async function getStorageUrl(storagePath: string): Promise<string> {
   if (!storagePath) return '';
   if (storagePath.startsWith('http://') || storagePath.startsWith('https://') || storagePath.startsWith('blob:')) {
     return storagePath;
   }
-  // Try getting signed URL first
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath, 60 * 60 * 24);
   if (!error && data?.signedUrl) {
     return data.signedUrl;
   }
-  // Fallback to public URL
   const { data: pubData } = supabase.storage.from(BUCKET).getPublicUrl(storagePath);
   return pubData.publicUrl;
 }
 
 /**
- * Fetch all user cloud data from Postgres, generate signed URLs, and hydrate Zustand + IndexedDB
+ * Hydrate Zustand store & local IndexedDB cache from Supabase for a given workspaceCode
  */
-export async function hydrateFromSupabase(userId: string, useStore: any): Promise<void> {
+export async function hydrateFromSupabase(workspaceCode: string, useStore: any): Promise<void> {
+  if (!workspaceCode) return;
+  const code = workspaceCode.toUpperCase();
+
   try {
-    // 1. Fetch decks
-    const { data: dbDecks, error: decksErr } = await supabase
+    await ensureWorkspace(code);
+
+    const { data: dbDecks } = await supabase
       .from('decks')
       .select('*')
-      .eq('user_id', userId)
+      .eq('workspace_code', code)
       .order('order_index', { ascending: true });
 
-    if (decksErr) console.error('Error fetching decks:', decksErr.message);
-
-    // 2. Fetch slides
-    const { data: dbSlides, error: slidesErr } = await supabase
+    const { data: dbSlides } = await supabase
       .from('slides')
       .select('*')
-      .eq('user_id', userId)
+      .eq('workspace_code', code)
       .order('order_index', { ascending: true });
 
-    if (slidesErr) console.error('Error fetching slides:', slidesErr.message);
-
-    // 3. Fetch tracks
-    const { data: dbTracks, error: tracksErr } = await supabase
+    const { data: dbTracks } = await supabase
       .from('tracks')
       .select('*')
-      .eq('user_id', userId)
+      .eq('workspace_code', code)
       .order('order_index', { ascending: true });
 
-    if (tracksErr) console.error('Error fetching tracks:', tracksErr.message);
-
-    // 4. Fetch media assets
-    const { data: dbMedia, error: mediaErr } = await supabase
+    const { data: dbMedia } = await supabase
       .from('media_assets')
       .select('*')
-      .eq('user_id', userId)
+      .eq('workspace_code', code)
       .order('order_index', { ascending: true });
 
-    if (mediaErr) console.error('Error fetching media:', mediaErr.message);
-
-    // Process Decks & Slides
     const decksList = dbDecks || [];
     const slidesList = dbSlides || [];
 
@@ -105,7 +127,6 @@ export async function hydrateFromSupabase(userId: string, useStore: any): Promis
       })
     );
 
-    // Process Audio Tracks
     const tracksList = dbTracks || [];
     const restoredTracks: AudioTrack[] = await Promise.all(
       tracksList.map(async (t: any) => ({
@@ -115,7 +136,6 @@ export async function hydrateFromSupabase(userId: string, useStore: any): Promis
       }))
     );
 
-    // Process Photos & Videos
     const mediaList = dbMedia || [];
     const restoredPhotos: MediaItem[] = [];
     const restoredVideos: MediaItem[] = [];
@@ -137,7 +157,6 @@ export async function hydrateFromSupabase(userId: string, useStore: any): Promis
       })
     );
 
-    // Hydrate Zustand Store
     const state = useStore.getState();
     const activeDeck = restoredDecks[0];
     state.setDecks(restoredDecks);
@@ -149,13 +168,12 @@ export async function hydrateFromSupabase(userId: string, useStore: any): Promis
     state.setPhotos(restoredPhotos);
     state.setVideos(restoredVideos);
 
-    // Populate local IndexedDB cache for offline buffer
     await saveDecks(restoredDecks);
     await saveAudioTracks(restoredTracks);
     await syncPhotos(restoredPhotos);
     await syncVideos(restoredVideos);
   } catch (err) {
-    console.error('Failed to hydrate from Supabase:', err);
+    console.error('Failed to hydrate workspace from Supabase:', err);
   }
 }
 
@@ -163,11 +181,13 @@ export async function hydrateFromSupabase(userId: string, useStore: any): Promis
 // Write-Through Mutation Helpers (Row update + Storage)
 // ----------------------------------------------------
 
-export async function syncDeckUpsert(userId: string, deckId: string, name: string, orderIndex: number) {
+export async function syncDeckUpsert(workspaceCode: string, deckId: string, name: string, orderIndex: number) {
   try {
+    const code = workspaceCode.toUpperCase();
+    await ensureWorkspace(code);
     await supabase.from('decks').upsert({
       id: deckId,
-      user_id: userId,
+      workspace_code: code,
       name,
       order_index: orderIndex,
       updated_at: new Date().toISOString(),
@@ -177,16 +197,16 @@ export async function syncDeckUpsert(userId: string, deckId: string, name: strin
   }
 }
 
-export async function syncDeckDelete(userId: string, deckId: string) {
+export async function syncDeckDelete(workspaceCode: string, deckId: string) {
   try {
-    await supabase.from('decks').delete().eq('id', deckId).eq('user_id', userId);
+    await supabase.from('decks').delete().eq('id', deckId).eq('workspace_code', workspaceCode.toUpperCase());
   } catch (err) {
     console.error('syncDeckDelete error:', err);
   }
 }
 
 export async function syncSlideUpsert(
-  userId: string,
+  workspaceCode: string,
   slideId: string,
   deckId: string,
   storagePath: string,
@@ -194,10 +214,12 @@ export async function syncSlideUpsert(
   isKey: boolean
 ) {
   try {
+    const code = workspaceCode.toUpperCase();
+    await ensureWorkspace(code);
     await supabase.from('slides').upsert({
       id: slideId,
       deck_id: deckId,
-      user_id: userId,
+      workspace_code: code,
       storage_path: storagePath,
       order_index: orderIndex,
       is_key: isKey,
@@ -208,19 +230,21 @@ export async function syncSlideUpsert(
   }
 }
 
-export async function syncSlideDelete(userId: string, slideId: string) {
+export async function syncSlideDelete(workspaceCode: string, slideId: string) {
   try {
-    await supabase.from('slides').delete().eq('id', slideId).eq('user_id', userId);
+    await supabase.from('slides').delete().eq('id', slideId).eq('workspace_code', workspaceCode.toUpperCase());
   } catch (err) {
     console.error('syncSlideDelete error:', err);
   }
 }
 
-export async function syncTrackUpsert(userId: string, trackId: string, title: string, storagePath: string, orderIndex: number) {
+export async function syncTrackUpsert(workspaceCode: string, trackId: string, title: string, storagePath: string, orderIndex: number) {
   try {
+    const code = workspaceCode.toUpperCase();
+    await ensureWorkspace(code);
     await supabase.from('tracks').upsert({
       id: trackId,
-      user_id: userId,
+      workspace_code: code,
       title,
       storage_path: storagePath,
       order_index: orderIndex,
@@ -231,19 +255,21 @@ export async function syncTrackUpsert(userId: string, trackId: string, title: st
   }
 }
 
-export async function syncTrackDelete(userId: string, trackId: string) {
+export async function syncTrackDelete(workspaceCode: string, trackId: string) {
   try {
-    await supabase.from('tracks').delete().eq('id', trackId).eq('user_id', userId);
+    await supabase.from('tracks').delete().eq('id', trackId).eq('workspace_code', workspaceCode.toUpperCase());
   } catch (err) {
     console.error('syncTrackDelete error:', err);
   }
 }
 
-export async function syncMediaAssetUpsert(userId: string, assetId: string, type: 'photo' | 'video', storagePath: string, orderIndex: number) {
+export async function syncMediaAssetUpsert(workspaceCode: string, assetId: string, type: 'photo' | 'video', storagePath: string, orderIndex: number) {
   try {
+    const code = workspaceCode.toUpperCase();
+    await ensureWorkspace(code);
     await supabase.from('media_assets').upsert({
       id: assetId,
-      user_id: userId,
+      workspace_code: code,
       type,
       storage_path: storagePath,
       order_index: orderIndex,
@@ -254,9 +280,9 @@ export async function syncMediaAssetUpsert(userId: string, assetId: string, type
   }
 }
 
-export async function syncMediaAssetDelete(userId: string, assetId: string) {
+export async function syncMediaAssetDelete(workspaceCode: string, assetId: string) {
   try {
-    await supabase.from('media_assets').delete().eq('id', assetId).eq('user_id', userId);
+    await supabase.from('media_assets').delete().eq('id', assetId).eq('workspace_code', workspaceCode.toUpperCase());
   } catch (err) {
     console.error('syncMediaAssetDelete error:', err);
   }
