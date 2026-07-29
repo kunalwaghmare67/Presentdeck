@@ -345,7 +345,27 @@ export async function loadWorkflowsFromDB(currentUser?: AuthSession | null): Pro
     console.warn('Could not fetch workflows from Supabase:', err);
   }
 
-  // 3. Merge Cloud + Local workflows by ID
+  // 3. Auto-sync any local workflows missing from Cloud up to Supabase
+  const cloudIdSet = new Set(cloudWorkflows.map(w => w.id));
+  for (const localWf of localFiltered) {
+    if (!cloudIdSet.has(localWf.id)) {
+      try {
+        const cloudState = await prepareStateForCloud(localWf.state);
+        await supabase.from('workflows').upsert({
+          id: localWf.id,
+          name: localWf.name,
+          username: localWf.username || currentUser.username,
+          saved_at: localWf.savedAt,
+          state: cloudState,
+        });
+        cloudWorkflows.push(localWf);
+      } catch (e) {
+        console.error('Failed auto-syncing local workflow to cloud:', e);
+      }
+    }
+  }
+
+  // 4. Merge Cloud + Local workflows by ID
   const workflowMap = new Map<string, SavedWorkflow>();
 
   for (const wf of localFiltered) {
