@@ -145,22 +145,24 @@ export function PresentationArea() {
     } catch { /* unsupported */ }
 
     const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
+    const currentLive = useStore.getState().liveContent;
 
-    if (presentingRef.current && !presentingRef.current.closed) {
-      presentingRef.current.focus();
-    } else {
-      presentingRef.current = window.open(
-        liveUrl,
-        'PresentDeck-Live',
-        'width=960,height=540,menubar=no,toolbar=no,location=no,status=no'
-      );
+    const win = window.open(
+      liveUrl,
+      'PresentDeck-Live',
+      'width=960,height=540,menubar=no,toolbar=no,location=no,status=no'
+    );
+
+    if (win) {
+      (win as any).LIVE_CONTENT = currentLive;
+      presentingRef.current = win;
     }
 
-    const currentLive = useStore.getState().liveContent;
     if (currentLive.type !== 'none') {
       const channel = new BroadcastChannel('presentdeck-sync');
-      [50, 150, 350, 750].forEach(delay => {
+      [50, 150, 300, 600, 1200].forEach(delay => {
         setTimeout(() => {
+          if (win) (win as any).LIVE_CONTENT = currentLive;
           channel.postMessage(currentLive);
           try {
             localStorage.setItem('presentdeck_live_cache', JSON.stringify(currentLive));

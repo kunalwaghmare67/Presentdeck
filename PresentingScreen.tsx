@@ -5,6 +5,12 @@ import './PresentingScreen.css';
 export function PresentingScreen() {
   const [content, setContent] = useState<LiveContent>(() => {
     try {
+      if ((window as any).LIVE_CONTENT?.url) {
+        return (window as any).LIVE_CONTENT;
+      }
+      if (window.opener && (window.opener as any).LIVE_CONTENT?.url) {
+        return (window.opener as any).LIVE_CONTENT;
+      }
       const cached = localStorage.getItem('presentdeck_live_cache');
       return cached ? JSON.parse(cached) : { type: 'none', url: '' };
     } catch {
@@ -26,9 +32,19 @@ export function PresentingScreen() {
       }
     };
 
-    // Announce active live window to main window & request current live content
+    // Broadcast active status & request sync
     channel.postMessage({ action: 'LIVE_WINDOW_ACTIVE' });
     channel.postMessage({ action: 'REQUEST_SYNC' });
+
+    // Poll window.opener or global LIVE_CONTENT as fallback
+    const interval = setInterval(() => {
+      try {
+        const directContent = (window as any).LIVE_CONTENT || (window.opener as any)?.LIVE_CONTENT;
+        if (directContent && directContent.url && directContent.url !== content.url) {
+          setContent(directContent);
+        }
+      } catch {}
+    }, 300);
 
     const handleUnload = () => {
       channel.postMessage({ action: 'LIVE_WINDOW_CLOSED' });
@@ -37,13 +53,14 @@ export function PresentingScreen() {
     window.addEventListener('beforeunload', handleUnload);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener('beforeunload', handleUnload);
       channel.postMessage({ action: 'LIVE_WINDOW_CLOSED' });
       channel.close();
     };
-  }, []);
+  }, [content.url]);
 
-  // Sync video playback time & play/pause state
+  // Sync video element playback time & play/pause state
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !content) return;
