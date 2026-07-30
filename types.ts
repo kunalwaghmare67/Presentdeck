@@ -36,6 +36,7 @@ export interface LiveContent {
   mediaType?: string;
   isPlaying?: boolean;
   currentTime?: number;
+  isMuted?: boolean;
 }
 
 export interface WorkflowSlideItem {

@@ -165,36 +165,50 @@ export async function loadAudioTracks(): Promise<AudioTrack[]> {
 
 // Photos
 export async function savePhoto(item: MediaItem) {
+  const blob = await getBlobFromUrl(item.url, item.blob);
   const db = await dbPromise;
-  await db.put('photos', { id: item.id, data: item.url, name: item.name });
+  await db.put('photos', { id: item.id, blob, name: item.name } as any);
 }
 
 export async function loadPhotos(): Promise<MediaItem[]> {
   const db = await dbPromise;
   const items = await db.getAll('photos');
-  return items.map(i => ({
-    id: i.id,
-    url: i.data,
-    type: 'image' as const,
-    name: i.name,
-  }));
+  return items.map(i => {
+    const itemObj = i as any;
+    const blob = itemObj.blob;
+    const url = blob ? URL.createObjectURL(blob) : itemObj.data || '';
+    return {
+      id: i.id,
+      url,
+      type: 'image' as const,
+      name: i.name,
+      blob,
+    };
+  });
 }
 
 // Videos
 export async function saveVideo(item: MediaItem) {
+  const blob = await getBlobFromUrl(item.url, item.blob);
   const db = await dbPromise;
-  await db.put('videos', { id: item.id, data: item.url, name: item.name });
+  await db.put('videos', { id: item.id, blob, name: item.name } as any);
 }
 
 export async function loadVideos(): Promise<MediaItem[]> {
   const db = await dbPromise;
   const items = await db.getAll('videos');
-  return items.map(i => ({
-    id: i.id,
-    url: i.data,
-    type: 'video' as const,
-    name: i.name,
-  }));
+  return items.map(i => {
+    const itemObj = i as any;
+    const blob = itemObj.blob;
+    const url = blob ? URL.createObjectURL(blob) : itemObj.data || '';
+    return {
+      id: i.id,
+      url,
+      type: 'video' as const,
+      name: i.name,
+      blob,
+    };
+  });
 }
 
 export async function deletePhoto(id: string) {
@@ -208,21 +222,35 @@ export async function deleteVideo(id: string) {
 }
 
 export async function syncPhotos(photos: MediaItem[]) {
+  const prepared = await Promise.all(
+    photos.map(async p => ({
+      id: p.id,
+      blob: await getBlobFromUrl(p.url, p.blob),
+      name: p.name,
+    }))
+  );
   const db = await dbPromise;
   const tx = db.transaction('photos', 'readwrite');
   await tx.store.clear();
-  for (const item of photos) {
-    await tx.store.put({ id: item.id, data: item.url, name: item.name });
+  for (const item of prepared) {
+    await tx.store.put(item as any);
   }
   await tx.done;
 }
 
 export async function syncVideos(videos: MediaItem[]) {
+  const prepared = await Promise.all(
+    videos.map(async v => ({
+      id: v.id,
+      blob: await getBlobFromUrl(v.url, v.blob),
+      name: v.name,
+    }))
+  );
   const db = await dbPromise;
   const tx = db.transaction('videos', 'readwrite');
   await tx.store.clear();
-  for (const item of videos) {
-    await tx.store.put({ id: item.id, data: item.url, name: item.name });
+  for (const item of prepared) {
+    await tx.store.put(item as any);
   }
   await tx.done;
 }
