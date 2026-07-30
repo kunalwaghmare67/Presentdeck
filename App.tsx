@@ -15,9 +15,21 @@ import type { MediaItem, SlideItem } from './types';
 import { SyncBanner } from './components/SyncBanner';
 
 export default function App() {
-  const isPresentingView = typeof window !== 'undefined' && (
-    window.location.hash === '#presenting' || window.location.pathname.includes('presenting')
+  const [isPresentingView, setIsPresentingView] = useState(() =>
+    typeof window !== 'undefined' && (
+      window.location.hash === '#presenting' || window.location.pathname.includes('presenting')
+    )
   );
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setIsPresentingView(
+        window.location.hash === '#presenting' || window.location.pathname.includes('presenting')
+      );
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const { currentUser } = useAuth();
   const setLiveContent = useStore(state => state.setLiveContent);
