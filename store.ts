@@ -508,20 +508,34 @@ export const useStore = create<AppState>((set, get) => ({
 
   setLiveContent: (content) => {
     let resolved = content;
-    if (content.type === 'slide' && !content.mediaType) {
+    let rawBlob: Blob | undefined = undefined;
+
+    if (content.url) {
       const targetSlide = get().slides.find(s => s.url === content.url);
       if (targetSlide) {
+        rawBlob = targetSlide.blob;
         resolved = {
           ...content,
           mediaType: targetSlide.mediaType || (targetSlide.blob?.type?.startsWith('video/') ? 'video' : 'image'),
         };
+      } else {
+        const targetVideo = get().videos.find(v => v.url === content.url);
+        if (targetVideo) rawBlob = targetVideo.blob;
+        const targetPhoto = get().photos.find(p => p.url === content.url);
+        if (targetPhoto) rawBlob = targetPhoto.blob;
       }
     }
+
     set({ liveContent: resolved });
     try {
       localStorage.setItem('presentdeck_live_cache', JSON.stringify(resolved));
     } catch {}
-    channel.postMessage(resolved);
+
+    channel.postMessage({
+      ...resolved,
+      rawBlob: rawBlob || undefined,
+    });
+
     if (resolved.type === 'slide') {
       const idx = get().slides.findIndex(s => s.url === resolved.url);
       if (idx >= 0) set({ currentSlideIndex: idx, selectedSlideId: get().slides[idx].id });

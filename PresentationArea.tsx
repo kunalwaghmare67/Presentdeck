@@ -43,7 +43,16 @@ export function PresentationArea() {
         setIsLiveWindowOpen(true);
         const currentLive = useStore.getState().liveContent;
         if (currentLive.type !== 'none') {
-          channel.postMessage(currentLive);
+          const store = useStore.getState();
+          const targetSlide = store.slides.find(s => s.url === currentLive.url);
+          const targetVideo = store.videos.find(v => v.url === currentLive.url);
+          const targetPhoto = store.photos.find(p => p.url === currentLive.url);
+          const rawBlob = targetSlide?.blob || targetVideo?.blob || targetPhoto?.blob;
+
+          channel.postMessage({
+            ...currentLive,
+            rawBlob: rawBlob || undefined,
+          });
         }
       } else if (e.data.action === 'LIVE_WINDOW_ACTIVE') {
         setIsLiveWindowOpen(true);
