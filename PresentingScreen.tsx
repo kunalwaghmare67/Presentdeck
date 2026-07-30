@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import type { LiveContent } from '../types';
 import './PresentingScreen.css';
 
@@ -12,8 +12,11 @@ export function PresentingScreen() {
     }
   });
 
+  const videoRef = useRef<HTMLVideoElement>(null);
+
   useEffect(() => {
     const channel = new BroadcastChannel('presentdeck-sync');
+
     channel.onmessage = (e) => {
       if (e.data && e.data.type) {
         setContent(e.data);
@@ -22,12 +25,51 @@ export function PresentingScreen() {
         } catch {}
       }
     };
-    return () => channel.close();
+
+    // Announce active live window to main window & request current live content
+    channel.postMessage({ action: 'LIVE_WINDOW_ACTIVE' });
+    channel.postMessage({ action: 'REQUEST_SYNC' });
+
+    const handleUnload = () => {
+      channel.postMessage({ action: 'LIVE_WINDOW_CLOSED' });
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      channel.postMessage({ action: 'LIVE_WINDOW_CLOSED' });
+      channel.close();
+    };
   }, []);
 
-  // Ctrl+L toggles fullscreen (for projector extended display)
+  // Sync video playback time & play/pause state
   useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !content) return;
+
+    if (typeof content.currentTime === 'number') {
+      if (Math.abs(video.currentTime - content.currentTime) > 0.5) {
+        video.currentTime = content.currentTime;
+      }
+    }
+
+    if (content.isPlaying === true && video.paused) {
+      video.play().catch(() => {
+        video.muted = true;
+        video.play().catch(() => {});
+      });
+    } else if (content.isPlaying === false && !video.paused) {
+      video.pause();
+    }
+  }, [content]);
+
+  // Global Keyboard shortcuts in Live Window (Space, Left/Right arrows, M, Ctrl+L)
+  useEffect(() => {
+    const channel = new BroadcastChannel('presentdeck-sync');
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+L for fullscreen
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         if (!document.fullscreenElement) {
@@ -35,10 +77,29 @@ export function PresentingScreen() {
         } else {
           document.exitFullscreen().catch(() => {});
         }
+        return;
+      }
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        channel.postMessage({ action: 'KEY_COMMAND', key: 'Space' });
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        channel.postMessage({ action: 'KEY_COMMAND', key: 'ArrowLeft' });
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        channel.postMessage({ action: 'KEY_COMMAND', key: 'ArrowRight' });
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        channel.postMessage({ action: 'KEY_COMMAND', key: 'm' });
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      channel.close();
+    };
   }, []);
 
   if (content.type === 'none' || !content.url) {
@@ -63,10 +124,17 @@ export function PresentingScreen() {
   return (
     <div className="presenting-root">
       {!isLiveVideo && (
-        <img src={content.url} className="presenting-media" alt="" />
+        <img src={content.url} className="presenting-media" alt="Live View" />
       )}
       {isLiveVideo && (
-        <video src={content.url} className="presenting-media" autoPlay loop muted={false} />
+        <video
+          ref={videoRef}
+          src={content.url}
+          className="presenting-media"
+          autoPlay
+          loop
+          playsInline
+        />
       )}
     </div>
   );

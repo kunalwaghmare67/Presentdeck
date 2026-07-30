@@ -32,6 +32,49 @@ export function PresentationArea() {
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
 
+  const [isLiveWindowOpen, setIsLiveWindowOpen] = useState(false);
+
+  // Handshake & command listener for BroadcastChannel
+  useEffect(() => {
+    const channel = new BroadcastChannel('presentdeck-sync');
+    channel.onmessage = (e) => {
+      if (!e.data) return;
+      if (e.data.action === 'REQUEST_SYNC') {
+        setIsLiveWindowOpen(true);
+        const currentLive = useStore.getState().liveContent;
+        if (currentLive.type !== 'none') {
+          channel.postMessage(currentLive);
+        }
+      } else if (e.data.action === 'LIVE_WINDOW_ACTIVE') {
+        setIsLiveWindowOpen(true);
+      } else if (e.data.action === 'LIVE_WINDOW_CLOSED') {
+        setIsLiveWindowOpen(false);
+      } else if (e.data.action === 'KEY_COMMAND') {
+        if (e.data.key === 'Space') {
+          togglePlay();
+        } else if (e.data.key === 'ArrowLeft') {
+          skipTime(-5);
+        } else if (e.data.key === 'ArrowRight') {
+          skipTime(5);
+        } else if (e.data.key === 'm') {
+          toggleMute();
+        }
+      }
+    };
+    return () => channel.close();
+  }, [liveContent, isPlaying, isMuted, isLiveWindowOpen]);
+
+  // Dynamic Audio Routing: Mute local video when Live window is open; play local sound when not live!
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isLiveWindowOpen) {
+      video.muted = true;
+    } else {
+      video.muted = isMuted;
+    }
+  }, [isLiveWindowOpen, isMuted, liveContent.url]);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -45,15 +88,40 @@ export function PresentationArea() {
       });
     }
 
-    const handleTimeUpdate = () => setCurrentTime(video.currentTime);
+    const channel = new BroadcastChannel('presentdeck-sync');
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+    };
+
     const handleLoadedMetadata = () => {
       setDuration(video.duration || 0);
       if (video.paused) {
         video.currentTime = 0.1;
       }
     };
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+
+    const handlePlay = () => {
+      setIsPlaying(true);
+      if (liveContent.type !== 'none') {
+        channel.postMessage({
+          ...liveContent,
+          currentTime: video.currentTime,
+          isPlaying: true,
+        });
+      }
+    };
+
+    const handlePause = () => {
+      setIsPlaying(false);
+      if (liveContent.type !== 'none') {
+        channel.postMessage({
+          ...liveContent,
+          currentTime: video.currentTime,
+          isPlaying: false,
+        });
+      }
+    };
 
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -65,6 +133,7 @@ export function PresentationArea() {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('pause', handlePause);
+      channel.close();
     };
   }, [liveContent.url, isLiveVideo]);
 
@@ -75,7 +144,7 @@ export function PresentationArea() {
       }
     } catch { /* unsupported */ }
 
-    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`; /* presenting.html */
+    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
 
     if (presentingRef.current && !presentingRef.current.closed) {
       presentingRef.current.focus();
@@ -89,15 +158,47 @@ export function PresentationArea() {
 
     const currentLive = useStore.getState().liveContent;
     if (currentLive.type !== 'none') {
-      setTimeout(() => {
-        useStore.getState().setLiveContent(currentLive);
-      }, 150);
+      const channel = new BroadcastChannel('presentdeck-sync');
+      [50, 150, 350, 750].forEach(delay => {
+        setTimeout(() => {
+          channel.postMessage(currentLive);
+          try {
+            localStorage.setItem('presentdeck_live_cache', JSON.stringify(currentLive));
+          } catch {}
+        }, delay);
+      });
     }
   };
 
+  // Keyboard shortcuts: Space (Play/Pause), Left Arrow (-5s), Right Arrow (+5s), M (Mute)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        skipTime(-5);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        skipTime(5);
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        toggleMute();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [liveContent, isPlaying, isMuted]);
+
   const togglePlay = () => {
     if (!videoRef.current) return;
-    videoRef.current.muted = isMuted;
     if (videoRef.current.paused) {
       videoRef.current.play().catch(console.error);
     } else {
@@ -114,7 +215,15 @@ export function PresentationArea() {
 
   const skipTime = (seconds: number) => {
     if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds));
+    const newTime = Math.max(0, Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds));
+    videoRef.current.currentTime = newTime;
+    const channel = new BroadcastChannel('presentdeck-sync');
+    channel.postMessage({
+      ...liveContent,
+      currentTime: newTime,
+      isPlaying: !videoRef.current.paused,
+    });
+    channel.close();
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -122,6 +231,13 @@ export function PresentationArea() {
     setCurrentTime(seekTime);
     if (videoRef.current) {
       videoRef.current.currentTime = seekTime;
+      const channel = new BroadcastChannel('presentdeck-sync');
+      channel.postMessage({
+        ...liveContent,
+        currentTime: seekTime,
+        isPlaying: !videoRef.current.paused,
+      });
+      channel.close();
     }
   };
 
@@ -181,6 +297,7 @@ export function PresentationArea() {
               className="preview-media"
               autoPlay
               loop
+              muted
               playsInline
               onClick={togglePlay}
             />
