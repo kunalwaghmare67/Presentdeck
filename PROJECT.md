@@ -1,43 +1,34 @@
-# Project: PresentDeck Discord Dark Theme Restyling
+# Project: PresentDeck Per-Operator Workflow Isolation & Master Override
 
 ## Architecture
-- Dual-entry Vite React 19 application (`index.html` -> `main.tsx` -> `App.tsx`, `presenting.html` -> `presenting-entry.tsx` -> `PresentingScreen.tsx`).
-- Auth context (`AuthContext.tsx` with SHA-256 hashed password verification for users `Kunal`, `Kunal1`, `Aashay`).
-- Zustand store (`store.ts`) for decks, slides, tracks, media, workflows.
-- Pure CSS with root CSS custom variables in `src/index.css` and component CSS files (`LoginPage.css`, `PPTFlow.css`, `MusicFlow.css`, `PresentationArea.css`, `PhotoArea.css`, `VideoArea.css`, `WorkflowManager.css`, `PresentingScreen.css`).
+- Dual-entry Vite React 19 application (`index.html` -> `main.tsx` -> `App.tsx`).
+- Auth context (`AuthContext.tsx` with user state, operator roles including 'master' and non-master operators).
+- IndexedDB storage (`db.ts`) for saved workflows (`SavedWorkflow` interface).
+- Zustand store (`store.ts`) managing workflow loading, saving, renaming, deleting, and active workflow state.
+- React UI components (`WorkflowManager.tsx`) managing workflow dropdown, modals, ownership badges, and action buttons.
 
 ## Code Layout
-- `src/index.css`: Global CSS variables, reset, font, scrollbar, grid layout.
-- `src/components/LoginPage.tsx` & `LoginPage.css`: Glassmorphic login card, inputs, labels, submit button, error messages.
-- `src/components/PPTFlow.tsx` & `PPTFlow.css`: Left panel (`.col-ppt`, width 260px).
-- `src/components/MusicFlow.tsx` & `MusicFlow.css`: Middle panel (`.col-music`, width 280px).
-- `src/components/PresentationArea.tsx` & `PresentationArea.css`: Top main area.
-- `src/components/PhotoArea.tsx` & `PhotoArea.css`: Bottom-left main panel.
-- `src/components/VideoArea.tsx` & `VideoArea.css`: Bottom-right main panel.
-- `src/components/WorkflowManager.tsx` & `WorkflowManager.css`: Header action dropdown & modal system.
-- `src/components/PresentingScreen.tsx` & `PresentingScreen.css`: Standalone presenter view.
+- `src/db.ts`: IndexedDB database initialization (`workflows` store), `loadWorkflowsFromDB`, `saveWorkflowToDB`, `deleteWorkflowFromDB`, `renameWorkflowInDB`.
+- `src/store.ts`: Zustand store for state management (`savedWorkflows`, `loadWorkflows`, `saveCurrentWorkflow`, `deleteWorkflow`, `renameWorkflow`, `openWorkflow`).
+- `src/components/WorkflowManager.tsx` & `WorkflowManager.css`: Workflow management UI modal, listing saved workflows, load/edit/rename/delete buttons, owner badge `👤 username`.
+- `src/context/AuthContext.tsx`: Auth state provider storing logged-in user (`username`, `role`).
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| E2E | E2E Testing Track | Independent opaque-box test suite for Tiers 1-4 requirements | none | DONE |
-| 1 | Login Page Discord Dark Restyling | R1: Restyle login page card, labels, inputs, primary button, links, headings, focus glow, drop shadow, exact hex colors | none | DONE |
-| 2 | Main Dashboard Dark Theme Color Pass | R2: Restyle main content background (#313338), sidebar/panels (#2b2d31), borders/dividers (#1e1f22), text (#f2f3f5, #b5bac1), accents (#5865f2, hover #4752c4) across index.css and all component CSS files | M1 | IN_PROGRESS |
-| 3 | Final Integration & E2E Verification | Pass 100% E2E test suite (Tiers 1-4) + Tier 5 Adversarial Coverage Hardening | M1, M2, E2E | PLANNED |
+| 1 | Data & Store Layer Isolation | R1 & R2: Tag workflows with creator `username`. Update `db.ts` (`loadWorkflowsFromDB`, `saveWorkflowToDB`, etc.) and `store.ts` to filter by username for non-master operators and enforce mutation/load access controls at data layer. | none | IN_PROGRESS |
+| 2 | UI Layer Access Control & Master Ownership Labeling | R2 & R3: Update `WorkflowManager.tsx` to scope load/edit/rename/delete UI controls to owner/master, and render operator ownership badge (`👤 username`) for master operator view. | M1 | PLANNED |
+| 3 | Final Verification & Forensic Audit | Verification: `npx tsc --noEmit` compiles with zero errors, unit/E2E test suite pass, Forensic Integrity Audit. | M1, M2 | PLANNED |
 
+## Interface Contracts & Requirements Reference
+### R1. Separate Storage & Data Layer Isolation Per Operator
+- Every saved workflow tagged with `creator` or `username` (operator ID).
+- `loadWorkflowsFromDB(username?: string, role?: string)` filters at DB layer: non-master operators receive strictly their own workflows.
+- Workflow overwrites scoped by name AND creator username so saving never overwrites another operator's workflow with the same name.
 
-## Interface Contracts & Color Tokens
-### Discord Hex Palette Reference
-- Outer Background: `#313338`
-- Centered Modal Card Background: `#2b2d31` or `#313338` (8px radius, max-width ~480px, drop shadow)
-- Inputs Background: `#1e1f22`, radius 3px, border 2px solid `#00a8fc` on focus, text `#ffffff`, padding 10px 12px
-- Labels: Uppercase, 12px, letter-spacing 0.02em, color `#b5bac1`, bold
-- Primary Button ("Log In"): Background `#5865f2` (blurple), hover `#4752c4`, text white bold, radius 3px, full width
-- Links ("Forgot your password?", "Register"): `#00a8fc`, underline on hover
-- Headings: "Welcome back!" bold white ~24px, subtext "We're so excited to see you again!" `#b5bac1` ~16px
-- Dashboard Primary Content Background: `#313338`
-- Dashboard Sidebar/Channel List Background: `#2b2d31`
-- Dashboard Secondary Panel Background: `#2b2d31`
-- Dashboard Borders/Dividers: `#1e1f22`
-- Dashboard Primary Text: `#f2f3f5`, Muted Text: `#b5bac1`
-- Dashboard Accent/Interactive: `#5865f2`, hover `#4752c4`
+### R2. Strict Mutation & Load Access Control
+- Non-master operators blocked from opening, loading, editing, renaming, or deleting another operator's workflow in both `store.ts`/`db.ts` and `WorkflowManager.tsx`.
+
+### R3. Master Operator Full Access & Ownership Labeling
+- Master operator (`role === 'master'`) bypasses filters to view, load, edit, rename, and delete all saved workflows.
+- Master view clearly displays operator ownership badge (`👤 username`) next to each workflow in the UI.

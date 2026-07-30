@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { useStore } from '../store';
 import { useAuth } from '../context/AuthContext';
@@ -12,11 +12,36 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+/** Convert a blob: URL to a data: URL so it can cross window boundaries */
+async function blobUrlToDataUrl(blobUrl: string): Promise<string> {
+  if (!blobUrl || !blobUrl.startsWith('blob:')) return blobUrl;
+  try {
+    const res = await fetch(blobUrl);
+    const blob = await res.blob();
+    return new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve((reader.result as string) || blobUrl);
+      reader.onerror = () => resolve(blobUrl);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return blobUrl;
+  }
+}
+
 export function PresentationArea() {
   const { liveContent } = useStore();
   const { isOver, setNodeRef } = useDroppable({ id: 'presentation-drop' });
   const videoRef = useRef<HTMLVideoElement>(null);
   const presentingRef = useRef<Window | null>(null);
+
+  // ── Refs for stable access inside channel handlers ──
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const liveContentRef = useRef(liveContent);
+  const isPlayingRef = useRef(false);
+  const isMutedRef = useRef(false);
+  const isLiveWindowOpenRef = useRef(false);
+  const lastTimeSyncRef = useRef(0); // throttle timeupdate broadcasts
 
   const isLiveVideo = liveContent.type === 'video' ||
     (liveContent.type === 'slide' && (
@@ -30,89 +55,300 @@ export function PresentationArea() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isLiveWindowOpen, setIsLiveWindowOpen] = useState(false);
 
+  // ── Keep refs in sync with state ──
+  useEffect(() => { liveContentRef.current = liveContent; }, [liveContent]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { isLiveWindowOpenRef.current = isLiveWindowOpen; }, [isLiveWindowOpen]);
+
+  // ── Helper: send a sync message to the live window ──
+  const broadcastSync = useCallback((overrides?: Record<string, any>) => {
+    const ch = channelRef.current;
+    if (!ch) return;
+    const video = videoRef.current;
+    const content = liveContentRef.current;
+    ch.postMessage({
+      action: 'SYNC_STATE',
+      type: content.type,
+      url: content.url,
+      mediaType: content.mediaType,
+      currentTime: video ? video.currentTime : 0,
+      isPlaying: isPlayingRef.current,
+      isMuted: isMutedRef.current,
+      ...overrides,
+    });
+  }, []);
+
+  // ── Core actions (ref-safe) ──
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(console.error);
+    } else {
+      video.pause();
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const newMuted = !isMutedRef.current;
+    isMutedRef.current = newMuted;
+    setIsMuted(newMuted);
+
+    // If live window is open, audio plays there — send mute command
+    if (isLiveWindowOpenRef.current) {
+      broadcastSync({ isMuted: newMuted });
+    } else {
+      video.muted = newMuted;
+    }
+  }, [broadcastSync]);
+
+  const skipTime = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const newTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
+    video.currentTime = newTime;
+    setCurrentTime(newTime);
+    broadcastSync({ currentTime: newTime });
+  }, [broadcastSync]);
+
+  // ── Single persistent BroadcastChannel ──
+  useEffect(() => {
+    const channel = new BroadcastChannel('presentdeck-sync');
+    channelRef.current = channel;
+
+    channel.onmessage = (e) => {
+      if (!e.data) return;
+      const { action } = e.data;
+
+      if (action === 'REQUEST_SYNC') {
+        isLiveWindowOpenRef.current = true;
+        setIsLiveWindowOpen(true);
+
+        // Send full state to newly opened live window instantly
+        const content = liveContentRef.current;
+        if (content.type !== 'none') {
+          const video = videoRef.current;
+          channel.postMessage({
+            action: 'CONTENT_UPDATE',
+            type: content.type,
+            url: content.url,
+            mediaType: content.mediaType,
+            currentTime: video ? video.currentTime : 0,
+            isPlaying: isPlayingRef.current,
+            isMuted: isMutedRef.current,
+          });
+        }
+      } else if (action === 'LIVE_WINDOW_ACTIVE') {
+        isLiveWindowOpenRef.current = true;
+        setIsLiveWindowOpen(true);
+      } else if (action === 'LIVE_WINDOW_CLOSED') {
+        isLiveWindowOpenRef.current = false;
+        setIsLiveWindowOpen(false);
+      } else if (action === 'KEY_COMMAND') {
+        if (e.data.key === 'Space') {
+          togglePlay();
+        } else if (e.data.key === 'ArrowLeft') {
+          skipTime(-5);
+        } else if (e.data.key === 'ArrowRight') {
+          skipTime(5);
+        } else if (e.data.key === 'm') {
+          toggleMute();
+        }
+      }
+    };
+
+    return () => {
+      channel.close();
+      channelRef.current = null;
+    };
+  }, []); // Mount once, never re-subscribe
+
+  // ── Audio routing: mute local when live window is open ──
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isLiveWindowOpen) {
+      // Audio plays in the live window; mute local preview
+      video.muted = true;
+    } else {
+      // No live window; local preview gets audio
+      video.muted = isMuted;
+    }
+  }, [isLiveWindowOpen, isMuted, liveContent.url]);
+
+  // ── Video element event wiring ──
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
+    // Reset for new content
     video.currentTime = 0;
+    setCurrentTime(0);
+    setIsPlaying(false);
+
+    // Try autoplay
     const playPromise = video.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
+        // Autoplay blocked — try muted
         video.muted = true;
         video.play().catch(() => {});
       });
     }
 
-    const handleTimeUpdate = () => setCurrentTime(video.currentTime);
-    const handleLoadedMetadata = () => {
-      setDuration(video.duration || 0);
-      if (video.paused) {
-        video.currentTime = 0.1;
+    const handleTimeUpdate = () => {
+      const t = video.currentTime;
+      setCurrentTime(t);
+
+      // Throttle sync broadcasts to ~10Hz (100ms) for frame-accurate 0-delay sync
+      const now = Date.now();
+      if (now - lastTimeSyncRef.current > 100) {
+        lastTimeSyncRef.current = now;
+        broadcastSync({ currentTime: t, isPlaying: !video.paused });
       }
     };
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+
+    const handleLoadedMetadata = () => {
+      setDuration(video.duration || 0);
+    };
+
+    const handlePlay = () => {
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      broadcastSync({ isPlaying: true, currentTime: video.currentTime });
+    };
+
+    const handlePause = () => {
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      broadcastSync({ isPlaying: false, currentTime: video.currentTime });
+    };
+
+    const handleSeeked = () => {
+      broadcastSync({ currentTime: video.currentTime, isPlaying: !video.paused });
+    };
 
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     video.addEventListener('play', handlePlay);
     video.addEventListener('pause', handlePause);
+    video.addEventListener('seeked', handleSeeked);
 
     return () => {
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('pause', handlePause);
+      video.removeEventListener('seeked', handleSeeked);
     };
-  }, [liveContent.url, isLiveVideo]);
+  }, [liveContent.url, isLiveVideo, broadcastSync]);
 
-  const handleGoLive = async () => {
+  // ── Broadcast content updates when live content changes (INSTANT 0ms) ──
+  useEffect(() => {
+    if (liveContent.type === 'none') return;
+    const ch = channelRef.current;
+    if (!ch) return;
+
+    ch.postMessage({
+      action: 'CONTENT_UPDATE',
+      type: liveContent.type,
+      url: liveContent.url,
+      mediaType: liveContent.mediaType,
+      currentTime: 0,
+      isPlaying: false,
+      isMuted: isMutedRef.current,
+    });
+
     try {
-      if ('getScreenDetails' in window) {
-        await (window as any).getScreenDetails();
-      }
-    } catch { /* unsupported */ }
+      localStorage.setItem('presentdeck_live_cache', JSON.stringify(liveContent));
+    } catch {}
+  }, [liveContent.url, liveContent.type]);
 
-    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`; /* presenting.html */
-
-    if (presentingRef.current && !presentingRef.current.closed) {
-      presentingRef.current.focus();
-    } else {
-      presentingRef.current = window.open(
-        liveUrl,
-        'PresentDeck-Live',
-        'width=960,height=540,menubar=no,toolbar=no,location=no,status=no'
-      );
-    }
-
+  const handleGoLive = () => {
+    // Synchronous call to window.open prevents browser popup blocker (about:blank#blocked)
     const currentLive = useStore.getState().liveContent;
+    // Uses #presenting hash navigation or presenting.html multi-entry routing
+    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
+
+    const win = window.open(
+      liveUrl,
+      'PresentDeck-Live',
+      'width=960,height=540,menubar=no,toolbar=no,location=no,status=no'
+    );
+
+    if (win) {
+      try {
+        (win as any).LIVE_CONTENT = currentLive;
+      } catch {}
+      presentingRef.current = win;
+    }
+
+    // Send content to live window immediately when opened
     if (currentLive.type !== 'none') {
-      setTimeout(() => {
-        useStore.getState().setLiveContent(currentLive);
-      }, 150);
+      const ch = channelRef.current;
+      if (ch) {
+        [20, 100, 300].forEach(delay => {
+          setTimeout(() => {
+            if (win) {
+              try { (win as any).LIVE_CONTENT = currentLive; } catch {}
+            }
+            ch.postMessage({
+              action: 'CONTENT_UPDATE',
+              type: currentLive.type,
+              url: currentLive.url,
+              mediaType: currentLive.mediaType,
+              currentTime: videoRef.current?.currentTime || 0,
+              isPlaying: isPlayingRef.current,
+              isMuted: isMutedRef.current,
+            });
+          }, delay);
+        });
+      }
+      try {
+        localStorage.setItem('presentdeck_live_cache', JSON.stringify(currentLive));
+      } catch {}
     }
   };
 
-  const togglePlay = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play().catch(console.error);
-    } else {
-      videoRef.current.pause();
-    }
-  };
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
 
-  const skipTime = (seconds: number) => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds));
-  };
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        skipTime(-5);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        skipTime(5);
+      } else if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        toggleMute();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePlay, skipTime, toggleMute]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const seekTime = parseFloat(e.target.value);
     setCurrentTime(seekTime);
     if (videoRef.current) {
       videoRef.current.currentTime = seekTime;
+      // seeked event handler will broadcast
     }
   };
 
@@ -201,6 +437,9 @@ export function PresentationArea() {
                 </button>
                 <button className="v-btn" onClick={() => skipTime(5)} title="Forward 5s">
                   +5s ⏩
+                </button>
+                <button className="v-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
+                  {isMuted ? '🔇 Muted' : '🔊 Sound On'}
                 </button>
               </div>
             </div>

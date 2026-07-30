@@ -34,6 +34,9 @@ export interface LiveContent {
   type: 'slide' | 'image' | 'video' | 'none';
   url: string;
   mediaType?: string;
+  isPlaying?: boolean;
+  currentTime?: number;
+  isMuted?: boolean;
 }
 
 export interface WorkflowSlideItem {

@@ -2,6 +2,21 @@ import { create } from 'zustand';
 import type { SlideItem, Deck, AudioTrack, MediaItem, LiveContent, SavedWorkflow, WorkflowDeck, WorkflowAudioTrack, WorkflowMediaItem, AuthSession } from './types';
 import { saveSlides, saveDecks, syncPhotos, syncVideos, saveAudioTracks, saveWorkflowToDB, loadWorkflowsFromDB, deleteWorkflowFromDB, renameWorkflowInDB } from './db';
 import { authenticateUser } from './config/authConfig';
+import {
+  syncDeckUpsert,
+  syncDeckDelete,
+  syncSlideUpsert,
+  syncTrackUpsert,
+  syncMediaAssetUpsert,
+} from './lib/sync';
+
+function getWorkspaceCode(): string | null {
+  try {
+    return localStorage.getItem('presentdeck_workspace_code') || null;
+  } catch {
+    return null;
+  }
+}
 
 interface AppState {
   decks: Deck[];
@@ -117,6 +132,11 @@ export const useStore = create<AppState>((set, get) => ({
       set({ decks });
     }
     saveDecks(decks).catch(console.error);
+
+    const code = getWorkspaceCode();
+    if (code) {
+      decks.forEach((d, idx) => syncDeckUpsert(code, d.id, d.title, idx));
+    }
   },
 
   setActiveDeckId: (id) => {
@@ -134,12 +154,23 @@ export const useStore = create<AppState>((set, get) => ({
     set({ decks: updatedDecks, activeDeckId: deckId, slides: newSlides, selectedSlideId: null, selectedSlideIds: [] });
     saveDecks(updatedDecks).catch(console.error);
     saveSlides(newSlides).catch(console.error);
+
+    const code = getWorkspaceCode();
+    if (code) {
+      syncDeckUpsert(code, newDeck.id, newDeck.title, updatedDecks.length - 1);
+    }
   },
 
   renameDeck: (id, newTitle) => {
     const updatedDecks = get().decks.map(d => d.id === id ? { ...d, title: newTitle } : d);
     set({ decks: updatedDecks });
     saveDecks(updatedDecks).catch(console.error);
+
+    const code = getWorkspaceCode();
+    if (code) {
+      const idx = updatedDecks.findIndex(x => x.id === id);
+      if (idx >= 0) syncDeckUpsert(code, id, newTitle, idx);
+    }
   },
 
   deleteDeck: (id) => {
@@ -160,6 +191,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({ decks: updatedDecks, activeDeckId: nextActiveId, slides: nextSlides, selectedSlideId: null, selectedSlideIds: [] });
     saveDecks(updatedDecks).catch(console.error);
     saveSlides(nextSlides).catch(console.error);
+
+    const code = getWorkspaceCode();
+    if (code) {
+      syncDeckDelete(code, id);
+    }
   },
 
   setSlides: (slides) => {
@@ -170,6 +206,11 @@ export const useStore = create<AppState>((set, get) => ({
       const updatedDecks = decks.map(d => d.id === activeDeckId ? { ...d, slides } : d);
       set({ decks: updatedDecks });
       saveDecks(updatedDecks).catch(console.error);
+
+      const code = getWorkspaceCode();
+      if (code) {
+        slides.forEach((s, idx) => syncSlideUpsert(code, s.id, activeDeckId, s.url, idx, !!s.isKey));
+      }
     }
   },
 
@@ -467,20 +508,34 @@ export const useStore = create<AppState>((set, get) => ({
 
   setLiveContent: (content) => {
     let resolved = content;
-    if (content.type === 'slide' && !content.mediaType) {
+    let rawBlob: Blob | undefined = undefined;
+
+    if (content.url) {
       const targetSlide = get().slides.find(s => s.url === content.url);
       if (targetSlide) {
+        rawBlob = targetSlide.blob;
         resolved = {
           ...content,
           mediaType: targetSlide.mediaType || (targetSlide.blob?.type?.startsWith('video/') ? 'video' : 'image'),
         };
+      } else {
+        const targetVideo = get().videos.find(v => v.url === content.url);
+        if (targetVideo) rawBlob = targetVideo.blob;
+        const targetPhoto = get().photos.find(p => p.url === content.url);
+        if (targetPhoto) rawBlob = targetPhoto.blob;
       }
     }
+
     set({ liveContent: resolved });
     try {
       localStorage.setItem('presentdeck_live_cache', JSON.stringify(resolved));
     } catch {}
-    channel.postMessage(resolved);
+
+    channel.postMessage({
+      ...resolved,
+      rawBlob: rawBlob || undefined,
+    });
+
     if (resolved.type === 'slide') {
       const idx = get().slides.findIndex(s => s.url === resolved.url);
       if (idx >= 0) set({ currentSlideIndex: idx, selectedSlideId: get().slides[idx].id });

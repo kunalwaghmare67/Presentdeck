@@ -41,9 +41,18 @@ export function WorkflowManager() {
   // Load saved workflows on mount with data-layer operator isolation
   useEffect(() => {
     loadWorkflowsFromDB(currentUser).then(list => {
-      if (list?.length) setWorkflows(list);
+      setWorkflows(list || []);
     }).catch(console.error);
   }, [setWorkflows, currentUser]);
+
+  // Re-fetch fresh workflows from Supabase whenever Saved Workflows modal is opened
+  useEffect(() => {
+    if (showListModal && currentUser) {
+      loadWorkflowsFromDB(currentUser).then(list => {
+        setWorkflows(list || []);
+      }).catch(console.error);
+    }
+  }, [showListModal, currentUser, setWorkflows]);
 
   // Click outside listener to close dropdown
   useEffect(() => {
