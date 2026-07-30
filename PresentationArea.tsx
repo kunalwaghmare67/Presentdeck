@@ -144,8 +144,13 @@ export function PresentationArea() {
       }
     } catch { /* unsupported */ }
 
-    const liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
     const currentLive = useStore.getState().liveContent;
+    let liveUrl = `${window.location.origin}${window.location.pathname}#presenting`;
+
+    if (currentLive.type !== 'none' && currentLive.url) {
+      const encodedUrl = encodeURIComponent(currentLive.url);
+      liveUrl = `${window.location.origin}${window.location.pathname}#presenting?url=${encodedUrl}&type=${currentLive.type}&mediaType=${currentLive.mediaType || ''}`;
+    }
 
     const win = window.open(
       liveUrl,

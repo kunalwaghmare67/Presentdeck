@@ -2,8 +2,31 @@ import { useEffect, useState, useRef } from 'react';
 import type { LiveContent } from '../types';
 import './PresentingScreen.css';
 
+function getURLParamsContent(): LiveContent | null {
+  try {
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    const targetString = hash.includes('?') ? hash.split('?')[1] : search.startsWith('?') ? search.substring(1) : '';
+
+    if (targetString) {
+      const params = new URLSearchParams(targetString);
+      const url = params.get('url');
+      const type = params.get('type') as any;
+      const mediaType = params.get('mediaType') || undefined;
+
+      if (url && type) {
+        return { type, url: decodeURIComponent(url), mediaType };
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function PresentingScreen() {
   const [content, setContent] = useState<LiveContent>(() => {
+    const urlContent = getURLParamsContent();
+    if (urlContent) return urlContent;
+
     try {
       if ((window as any).LIVE_CONTENT?.url) {
         return (window as any).LIVE_CONTENT;
@@ -36,9 +59,14 @@ export function PresentingScreen() {
     channel.postMessage({ action: 'LIVE_WINDOW_ACTIVE' });
     channel.postMessage({ action: 'REQUEST_SYNC' });
 
-    // Poll window.opener or global LIVE_CONTENT as fallback
+    // Poll URL, window.opener, or global LIVE_CONTENT as fallback
     const interval = setInterval(() => {
       try {
+        const urlParsed = getURLParamsContent();
+        if (urlParsed && urlParsed.url && urlParsed.url !== content.url) {
+          setContent(urlParsed);
+          return;
+        }
         const directContent = (window as any).LIVE_CONTENT || (window.opener as any)?.LIVE_CONTENT;
         if (directContent && directContent.url && directContent.url !== content.url) {
           setContent(directContent);
