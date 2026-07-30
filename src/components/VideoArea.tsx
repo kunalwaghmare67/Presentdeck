@@ -106,15 +106,11 @@ export function VideoArea() {
   const processFileList = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach(file => {
       if (!file.type.startsWith('video/')) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const url = ev.target?.result as string;
-        const item: MediaItem = { id: crypto.randomUUID(), url, type: 'video', name: file.name, blob: file };
-        const updated = [...useStore.getState().videos, item];
-        setVideos(updated);
-        saveVideo(item);
-      };
-      reader.readAsDataURL(file);
+      const url = URL.createObjectURL(file);
+      const item: MediaItem = { id: crypto.randomUUID(), url, type: 'video', name: file.name, blob: file };
+      const updated = [...useStore.getState().videos, item];
+      setVideos(updated);
+      saveVideo(item).catch(console.error);
     });
   }, [setVideos]);
 

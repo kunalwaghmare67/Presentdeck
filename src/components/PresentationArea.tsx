@@ -173,13 +173,9 @@ export function PresentationArea() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (isLiveWindowOpen) {
-      // Audio plays in the live window; mute local preview
-      video.muted = true;
-    } else {
-      // No live window; local preview gets audio
-      video.muted = isMuted;
-    }
+    const shouldMute = isLiveWindowOpen || isMuted;
+    video.muted = shouldMute;
+    video.volume = shouldMute ? 0 : 1;
   }, [isLiveWindowOpen, isMuted, liveContent.url]);
 
   // ── Video element event wiring ──
@@ -192,12 +188,16 @@ export function PresentationArea() {
     setCurrentTime(0);
     setIsPlaying(false);
 
+    const shouldMute = isLiveWindowOpenRef.current || isMutedRef.current;
+    video.muted = shouldMute;
+    video.volume = shouldMute ? 0 : 1;
+
     // Try autoplay
     const playPromise = video.play();
     if (playPromise !== undefined) {
       playPromise.catch(() => {
-        // Autoplay blocked — try muted
         video.muted = true;
+        video.volume = 0;
         video.play().catch(() => {});
       });
     }
@@ -216,11 +216,17 @@ export function PresentationArea() {
 
     const handleLoadedMetadata = () => {
       setDuration(video.duration || 0);
+      const mute = isLiveWindowOpenRef.current || isMutedRef.current;
+      video.muted = mute;
+      video.volume = mute ? 0 : 1;
     };
 
     const handlePlay = () => {
       isPlayingRef.current = true;
       setIsPlaying(true);
+      const mute = isLiveWindowOpenRef.current || isMutedRef.current;
+      video.muted = mute;
+      video.volume = mute ? 0 : 1;
       broadcastSync({ isPlaying: true, currentTime: video.currentTime });
     };
 
@@ -409,6 +415,7 @@ export function PresentationArea() {
               autoPlay
               loop
               playsInline
+              muted={isLiveWindowOpen || isMuted}
               onClick={togglePlay}
             />
 
