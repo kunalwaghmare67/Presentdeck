@@ -80,35 +80,27 @@ export function SyncBanner() {
     }
   };
 
+  if (isGuestMode) {
+    return null;
+  }
+
   return (
     <>
       <div className={`sync-banner ${isGuestMode ? 'guest' : 'synced'}`}>
         <div className="banner-content">
-          {isGuestMode ? (
-            <>
-              <span className="banner-icon">⚡</span>
-              <span className="banner-text">Local Guest Mode (Not synced across browsers)</span>
-              <button className="banner-btn" onClick={() => { setMode('options'); setShowModal(true); }}>
-                🔑 Connect Workspace Code to Sync Across PCs
-              </button>
-            </>
-          ) : (
-            <>
-              <span className="banner-icon">🔑</span>
-              <span className="banner-text">
-                Workspace Code: <strong className="code-badge">{workspaceCode}</strong>
-              </span>
-              <button className="banner-btn copy" onClick={handleCopyCode}>
-                {copied ? '✅ Copied!' : '📋 Copy Code'}
-              </button>
-              <button className="banner-btn switch" onClick={() => { setMode('options'); setShowModal(true); }}>
-                🔄 Switch / Join Code
-              </button>
-              <button className="banner-btn signout" onClick={handleLeave}>
-                Leave Workspace
-              </button>
-            </>
-          )}
+          <span className="banner-icon">🔑</span>
+          <span className="banner-text">
+            Workspace Code: <strong className="code-badge">{workspaceCode}</strong>
+          </span>
+          <button className="banner-btn copy" onClick={handleCopyCode}>
+            {copied ? '✅ Copied!' : '📋 Copy Code'}
+          </button>
+          <button className="banner-btn switch" onClick={() => { setMode('options'); setShowModal(true); }}>
+            🔄 Switch / Join Code
+          </button>
+          <button className="banner-btn signout" onClick={handleLeave}>
+            Leave Workspace
+          </button>
         </div>
       </div>
 
