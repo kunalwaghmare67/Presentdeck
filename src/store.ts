@@ -587,13 +587,14 @@ export const useStore = create<AppState>((set, get) => ({
             if (!blob && s.url.startsWith('blob:')) {
               try { const r = await fetch(s.url); blob = await r.blob(); } catch {}
             }
+            const dataUrl = await urlToDataUrl(s.url, blob);
             return {
               id: s.id,
               pageNum: s.pageNum,
               isKey: !!s.isKey,
               mediaType: s.mediaType || (blob?.type?.startsWith('video/') ? 'video' : 'image'),
               blob,
-              dataUrl: s.url.startsWith('data:') ? s.url : undefined,
+              dataUrl: dataUrl.startsWith('data:') ? dataUrl : (s.url.startsWith('data:') ? s.url : undefined),
             };
           })
         ),
@@ -606,11 +607,12 @@ export const useStore = create<AppState>((set, get) => ({
         if (!blob && t.url.startsWith('blob:')) {
           try { const r = await fetch(t.url); blob = await r.blob(); } catch {}
         }
+        const dataUrl = await urlToDataUrl(t.url, blob);
         return {
           id: t.id,
           name: t.name,
           blob,
-          dataUrl: t.url.startsWith('data:') ? t.url : undefined,
+          dataUrl: dataUrl.startsWith('data:') ? dataUrl : (t.url.startsWith('data:') ? t.url : undefined),
         };
       })
     );
@@ -621,12 +623,13 @@ export const useStore = create<AppState>((set, get) => ({
         if (!blob && p.url.startsWith('blob:')) {
           try { const r = await fetch(p.url); blob = await r.blob(); } catch {}
         }
+        const dataUrl = await urlToDataUrl(p.url, blob);
         return {
           id: p.id,
           name: p.name,
           type: 'image' as const,
           blob,
-          dataUrl: p.url.startsWith('data:') ? p.url : undefined,
+          dataUrl: dataUrl.startsWith('data:') ? dataUrl : (p.url.startsWith('data:') ? p.url : undefined),
         };
       })
     );
@@ -637,12 +640,13 @@ export const useStore = create<AppState>((set, get) => ({
         if (!blob && v.url.startsWith('blob:')) {
           try { const r = await fetch(v.url); blob = await r.blob(); } catch {}
         }
+        const dataUrl = await urlToDataUrl(v.url, blob);
         return {
           id: v.id,
           name: v.name,
           type: 'video' as const,
           blob,
-          dataUrl: v.url.startsWith('data:') ? v.url : undefined,
+          dataUrl: dataUrl.startsWith('data:') ? dataUrl : (v.url.startsWith('data:') ? v.url : undefined),
         };
       })
     );
@@ -983,9 +987,14 @@ async function urlToDataUrl(url: string, blob?: Blob): Promise<string> {
 }
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  if (dataUrl.startsWith('blob:')) {
-    const res = await fetch(dataUrl);
-    return await res.blob();
+  if (!dataUrl) return new Blob([], { type: 'application/octet-stream' });
+  if (dataUrl.startsWith('blob:') || dataUrl.startsWith('http://') || dataUrl.startsWith('https://') || dataUrl.startsWith('data:')) {
+    try {
+      const res = await fetch(dataUrl);
+      return await res.blob();
+    } catch {
+      // Fallback to manual decode below if fetch fails
+    }
   }
   if (!dataUrl.startsWith('data:')) {
     return new Blob([], { type: 'application/octet-stream' });

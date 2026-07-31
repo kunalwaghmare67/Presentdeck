@@ -281,9 +281,6 @@ async function prepareStateForCloud(state: any): Promise<any> {
         if (key === 'blob' || (value && typeof value === 'object' && value.constructor && value.constructor.name === 'Blob')) {
           return undefined;
         }
-        if (typeof value === 'string' && value.startsWith('data:') && value.length > 256 * 1024) {
-          return undefined;
-        }
         return value;
       })
     );
